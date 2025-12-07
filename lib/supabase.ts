@@ -1,14 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Vite uses import.meta.env with VITE_ prefix
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+// Configuration with provided credentials
+const supabaseUrl = process.env.SUPABASE_URL || "https://hqurxxzpljqensduuekw.supabase.co";
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhxdXJ4eHpwbGpxZW5zZHV1ZWt3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ4NTE3MDMsImV4cCI6MjA4MDQyNzcwM30.2NKXaS53eWUTel6jNZAd7r8eHZ0YVnVhrECm1Ve2yWw";
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn('Supabase credentials not found. Running in demo mode.');
-}
-
-export const supabase = createClient(
-  supabaseUrl || 'https://demo.supabase.co',
-  supabaseAnonKey || 'demo-key'
-);
+// Initialize Supabase Client
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);

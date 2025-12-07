@@ -3,7 +3,7 @@ import { supabase } from './lib/supabase';
 import { AGENTS } from './constants';
 import { AgentConfig, AgentCategory, View } from './types';
 import AgentCard from './components/AgentCard';
-import AgentWorkspace from './components/AgentWorkspaceV2';
+import AgentWorkspace from './components/AgentWorkspace';
 import ProjectView from './components/ProjectView';
 import AnalyticsView from './components/AnalyticsView';
 import BillingView from './components/BillingView';
@@ -22,7 +22,6 @@ const AppContent: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<string>('All');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [chainedContent, setChainedContent] = useState<string | null>(null);
-  const [plan, setPlan] = useState<string>('Free');
   
   const { theme, toggleTheme } = useTheme();
 
@@ -44,11 +43,6 @@ const AppContent: React.FC = () => {
         });
         return () => subscription.unsubscribe();
     }
-    
-    // Check for local storage plan simulation
-    const savedPlan = localStorage.getItem('revenuepilot_plan');
-    if (savedPlan) setPlan(savedPlan === 'starter' ? 'Free' : savedPlan.toUpperCase());
-
   }, []);
 
   const handleDemoLogin = () => {
@@ -248,20 +242,21 @@ const AppContent: React.FC = () => {
            </button>
 
            <div className={`flex items-center gap-3 p-2 rounded-lg mb-2 ${!isSidebarOpen && 'justify-center'}`}>
-             <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0">
-               {session.user.email?.[0].toUpperCase()}
-             </div>
-             {isSidebarOpen && (
-               <div className="flex-1 min-w-0">
-                 <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{session.user.email?.split('@')[0]}</p>
-                 <p className="text-xs text-slate-500 dark:text-slate-400">{plan} Plan</p>
-               </div>
-             )}
+              <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-900 flex items-center justify-center text-indigo-600 dark:text-indigo-300 font-bold border border-indigo-200 dark:border-indigo-700">
+                {session.user.email?.charAt(0).toUpperCase()}
+              </div>
+              {isSidebarOpen && (
+                <div className="overflow-hidden">
+                  <p className="text-sm font-medium truncate dark:text-white">{session.user.email}</p>
+                  <p className="text-xs text-amber-600 dark:text-amber-400 font-bold">Beta Access</p>
+                </div>
+              )}
            </div>
-
+           
            <button 
              onClick={handleLogout}
-             className={`w-full flex items-center gap-3 p-2 text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 rounded-lg transition-colors ${!isSidebarOpen && 'justify-center'}`}
+             className={`w-full flex items-center gap-3 p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors ${!isSidebarOpen && 'justify-center'}`}
+             title="Sign Out"
            >
              <Icons.LogOut size={18} />
              {isSidebarOpen && <span className="text-sm font-medium">Sign Out</span>}
@@ -269,36 +264,44 @@ const AppContent: React.FC = () => {
 
            <button 
              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-             className="w-full flex items-center justify-center p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded-lg transition-colors mt-2"
+             className="w-full mt-2 flex justify-center p-2 text-slate-300 hover:text-slate-500 dark:hover:text-slate-200 rounded-lg transition-colors"
            >
-             {isSidebarOpen ? <Icons.ChevronsLeft size={18} /> : <Icons.ChevronsRight size={18} />}
+             {isSidebarOpen ? <Icons.ChevronLeft size={16} /> : <Icons.ChevronRight size={16} />}
            </button>
         </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-hidden">
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col overflow-hidden h-full relative bg-slate-50 dark:bg-slate-950 transition-colors">
         {renderContent()}
       </main>
     </div>
   );
 };
 
-const NavItem = ({ icon, label, active, isOpen, onClick }: any) => (
-  <button
+interface NavItemProps {
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+  isOpen: boolean;
+  onClick: () => void;
+}
+
+const NavItem = ({ icon, label, active = false, isOpen, onClick }: NavItemProps) => (
+  <button 
     onClick={onClick}
-    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
+    className={`w-full flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors ${
       active 
-        ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 font-medium shadow-sm' 
-        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
+        ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-300 font-medium shadow-sm ring-1 ring-indigo-200 dark:ring-indigo-800' 
+        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200'
     } ${!isOpen && 'justify-center'}`}
   >
     {icon}
-    {isOpen && <span className="text-sm">{label}</span>}
+    {isOpen && <span>{label}</span>}
   </button>
 );
 
-function App() {
+const App: React.FC = () => {
   return (
     <ErrorBoundary>
       <ThemeProvider>
@@ -308,6 +311,6 @@ function App() {
       </ThemeProvider>
     </ErrorBoundary>
   );
-}
+};
 
 export default App;
