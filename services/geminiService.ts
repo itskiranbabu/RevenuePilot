@@ -1,16 +1,23 @@
 import { GoogleGenAI } from "@google/genai";
 
+// Vite uses import.meta.env instead of process.env
+const getApiKey = () => {
+  return import.meta.env.VITE_API_KEY || import.meta.env.API_KEY;
+};
+
 export const generateContent = async (
   modelName: string,
   prompt: string,
   systemInstruction?: string,
   config?: any
 ): Promise<string> => {
-  if (!process.env.API_KEY) {
-    throw new Error("API Key is missing. Please set it in the environment.");
+  const apiKey = getApiKey();
+  
+  if (!apiKey) {
+    throw new Error("API Key is missing. Please set VITE_API_KEY in your environment variables.");
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   
   try {
     const response = await ai.models.generateContent({
@@ -41,11 +48,13 @@ export const generateContentStream = async (
   onChunk?: (text: string) => void,
   config?: any
 ): Promise<string> => {
-  if (!process.env.API_KEY) {
-    throw new Error("API Key is missing. Please set it in the environment.");
+  const apiKey = getApiKey();
+  
+  if (!apiKey) {
+    throw new Error("API Key is missing. Please set VITE_API_KEY in your environment variables.");
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   let fullText = "";
   
   try {
@@ -81,11 +90,13 @@ export const generateConversation = async (
   history: Array<{ role: 'user' | 'model', parts: string }>,
   systemInstruction?: string
 ): Promise<string> => {
-  if (!process.env.API_KEY) {
-    throw new Error("API Key is missing. Please set it in the environment.");
+  const apiKey = getApiKey();
+  
+  if (!apiKey) {
+    throw new Error("API Key is missing. Please set VITE_API_KEY in your environment variables.");
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   
   try {
     const response = await ai.models.generateContent({
