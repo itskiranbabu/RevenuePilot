@@ -5,6 +5,89 @@ const getApiKey = () => {
   return import.meta.env.VITE_API_KEY || import.meta.env.API_KEY;
 };
 
+// Retry configuration
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY = 1000; // 1 second
+const MAX_RETRY_DELAY = 10000; // 10 seconds
+
+// Rate limiting
+let lastRequestTime = 0;
+const MIN_REQUEST_INTERVAL = 500; // 500ms between requests
+
+// Sleep utility
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Rate limiter
+const rateLimit = async () => {
+  const now = Date.now();
+  const timeSinceLastRequest = now - lastRequestTime;
+  
+  if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
+    await sleep(MIN_REQUEST_INTERVAL - timeSinceLastRequest);
+  }
+  
+  lastRequestTime = Date.now();
+};
+
+// Retry with exponential backoff
+const retryWithBackoff = async <T>(
+  fn: () => Promise<T>,
+  retries = MAX_RETRIES,
+  delay = INITIAL_RETRY_DELAY
+): Promise<T> => {
+  try {
+    await rateLimit();
+    return await fn();
+  } catch (error: any) {
+    if (retries === 0) {
+      throw error;
+    }
+
+    // Check if error is retryable (503, 429, network errors)
+    const isRetryable = 
+      error?.message?.includes('503') ||
+      error?.message?.includes('overloaded') ||
+      error?.message?.includes('429') ||
+      error?.message?.includes('rate limit') ||
+      error?.message?.includes('ECONNRESET') ||
+      error?.message?.includes('ETIMEDOUT');
+
+    if (!isRetryable) {
+      throw error;
+    }
+
+    console.warn(`Retrying after ${delay}ms... (${retries} retries left)`);
+    await sleep(delay);
+    
+    // Exponential backoff with jitter
+    const nextDelay = Math.min(delay * 2 + Math.random() * 1000, MAX_RETRY_DELAY);
+    return retryWithBackoff(fn, retries - 1, nextDelay);
+  }
+};
+
+// Enhanced error messages
+const getErrorMessage = (error: any): string => {
+  const errorStr = error?.message || String(error);
+  
+  if (errorStr.includes('503') || errorStr.includes('overloaded')) {
+    return "The AI service is currently experiencing high demand. Please try again in a few moments.";
+  }
+  
+  if (errorStr.includes('429') || errorStr.includes('rate limit')) {
+    return "Rate limit exceeded. Please wait a moment before trying again.";
+  }
+  
+  if (errorStr.includes('API key')) {
+    return "API Key is missing or invalid. Please check your configuration.";
+  }
+  
+  if (errorStr.includes('ECONNRESET') || errorStr.includes('ETIMEDOUT')) {
+    return "Network connection issue. Please check your internet and try again.";
+  }
+  
+  return "An error occurred while generating content. Please try again.";
+};
+
 export const generateContent = async (
   modelName: string,
   prompt: string,
@@ -18,27 +101,36 @@ export const generateContent = async (
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: modelName });
   
-  try {
-    const result = await model.generateContent({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.9,
-        topP: 0.95,
-        topK: 40,
-        maxOutputTokens: 8192,
-        ...config
-      },
-      systemInstruction: systemInstruction
-    });
+  return retryWithBackoff(async () => {
+    const model = genAI.getGenerativeModel({ model: modelName });
+    
+    try {
+      const result = await model.generateContent({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.9,
+          topP: 0.95,
+          topK: 40,
+          maxOutputTokens: 8192,
+          ...config
+        },
+        systemInstruction: systemInstruction
+      });
 
-    const response = result.response;
-    return response.text() || "No content generated.";
-  } catch (error) {
-    console.error("Gemini API Error:", error);
-    throw error;
-  }
+      const response = result.response;
+      const text = response.text();
+      
+      if (!text || text.trim().length === 0) {
+        throw new Error("No content generated. Please try again.");
+      }
+      
+      return text;
+    } catch (error: any) {
+      console.error("Gemini API Error:", error);
+      throw new Error(getErrorMessage(error));
+    }
+  });
 };
 
 // Streaming version for real-time output
@@ -56,33 +148,40 @@ export const generateContentStream = async (
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: modelName });
-  let fullText = "";
   
-  try {
-    const result = await model.generateContentStream({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.9,
-        topP: 0.95,
-        topK: 40,
-        maxOutputTokens: 8192,
-        ...config
-      },
-      systemInstruction: systemInstruction
-    });
+  return retryWithBackoff(async () => {
+    const model = genAI.getGenerativeModel({ model: modelName });
+    let fullText = "";
+    
+    try {
+      const result = await model.generateContentStream({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.9,
+          topP: 0.95,
+          topK: 40,
+          maxOutputTokens: 8192,
+          ...config
+        },
+        systemInstruction: systemInstruction
+      });
 
-    for await (const chunk of result.stream) {
-      const chunkText = chunk.text();
-      fullText += chunkText;
-      if (onChunk) onChunk(fullText);
+      for await (const chunk of result.stream) {
+        const chunkText = chunk.text();
+        fullText += chunkText;
+        if (onChunk) onChunk(fullText);
+      }
+
+      if (!fullText || fullText.trim().length === 0) {
+        throw new Error("No content generated. Please try again.");
+      }
+
+      return fullText;
+    } catch (error: any) {
+      console.error("Gemini API Streaming Error:", error);
+      throw new Error(getErrorMessage(error));
     }
-
-    return fullText || "No content generated.";
-  } catch (error) {
-    console.error("Gemini API Streaming Error:", error);
-    throw error;
-  }
+  });
 };
 
 // Advanced: Multi-turn conversation
@@ -98,28 +197,37 @@ export const generateConversation = async (
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: modelName });
   
-  try {
-    const chat = model.startChat({
-      history: history.map(h => ({
-        role: h.role,
-        parts: [{ text: h.parts }]
-      })),
-      generationConfig: {
-        temperature: 0.9,
-        topP: 0.95,
-        topK: 40,
-        maxOutputTokens: 8192
-      }
-    });
+  return retryWithBackoff(async () => {
+    const model = genAI.getGenerativeModel({ model: modelName });
+    
+    try {
+      const chat = model.startChat({
+        history: history.map(h => ({
+          role: h.role,
+          parts: [{ text: h.parts }]
+        })),
+        generationConfig: {
+          temperature: 0.9,
+          topP: 0.95,
+          topK: 40,
+          maxOutputTokens: 8192
+        }
+      });
 
-    const result = await chat.sendMessage(systemInstruction || "Continue the conversation");
-    return result.response.text() || "No content generated.";
-  } catch (error) {
-    console.error("Gemini Conversation Error:", error);
-    throw error;
-  }
+      const result = await chat.sendMessage(systemInstruction || "Continue the conversation");
+      const text = result.response.text();
+      
+      if (!text || text.trim().length === 0) {
+        throw new Error("No content generated. Please try again.");
+      }
+      
+      return text;
+    } catch (error: any) {
+      console.error("Gemini Conversation Error:", error);
+      throw new Error(getErrorMessage(error));
+    }
+  });
 };
 
 // AI-powered content analysis
@@ -154,9 +262,9 @@ export const analyzeContent = async (
     } catch {
       return { analysis: result };
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error("Content Analysis Error:", error);
-    throw error;
+    throw new Error(getErrorMessage(error));
   }
 };
 
@@ -179,8 +287,23 @@ export const getSuggestions = async (
       .filter(line => /^\d+\./.test(line.trim()))
       .map(line => line.replace(/^\d+\.\s*/, '').trim())
       .filter(Boolean);
-  } catch (error) {
+  } catch (error: any) {
     console.error("Suggestions Error:", error);
-    return [];
+    throw new Error(getErrorMessage(error));
+  }
+};
+
+// Health check
+export const checkApiHealth = async (): Promise<boolean> => {
+  try {
+    await generateContent(
+      'gemini-2.0-flash-exp',
+      'Say "OK" if you can read this.',
+      'You are a health check bot. Respond with exactly "OK".'
+    );
+    return true;
+  } catch (error) {
+    console.error("API Health Check Failed:", error);
+    return false;
   }
 };
