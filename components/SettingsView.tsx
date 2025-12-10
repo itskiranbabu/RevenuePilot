@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import * as Icons from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useToast } from '../context/ToastContext';
+import { checkProviderStatus, getRecommendedAPIKeys } from '../services/geminiService';
 
 const SettingsView: React.FC = () => {
   const { showToast } = useToast();
@@ -16,7 +17,14 @@ const SettingsView: React.FC = () => {
     email: ''
   });
   
+  const [providerStatus, setProviderStatus] = useState<{
+    available: string[];
+    health: Record<string, boolean>;
+    recommendation: string;
+  } | null>(null);
+  
   const [loading, setLoading] = useState(false);
+  const [checkingProviders, setCheckingProviders] = useState(false);
 
   useEffect(() => {
     const savedSettings = localStorage.getItem('revenuepilot_settings');
@@ -24,6 +32,7 @@ const SettingsView: React.FC = () => {
       setSettings(JSON.parse(savedSettings));
     }
     fetchProfile();
+    checkProviders();
   }, []);
 
   const fetchProfile = async () => {
@@ -41,6 +50,18 @@ const SettingsView: React.FC = () => {
         email: user.email || '',
         fullName: data?.full_name || ''
       });
+    }
+  };
+
+  const checkProviders = async () => {
+    setCheckingProviders(true);
+    try {
+      const status = await checkProviderStatus();
+      setProviderStatus(status);
+    } catch (error) {
+      console.error('Failed to check provider status:', error);
+    } finally {
+      setCheckingProviders(false);
     }
   };
 
@@ -88,13 +109,151 @@ const SettingsView: React.FC = () => {
     setLoading(false);
   };
 
+  const getProviderIcon = (providerName: string) => {
+    const icons: Record<string, any> = {
+      'Google Gemini': Icons.Sparkles,
+      'Groq': Icons.Zap,
+      'Together AI': Icons.Users,
+      'Hugging Face': Icons.Heart
+    };
+    return icons[providerName] || Icons.Bot;
+  };
+
+  const getStatusColor = (providerName: string) => {
+    if (!providerStatus) return 'text-slate-400';
+    
+    const isAvailable = providerStatus.available.includes(providerName);
+    if (!isAvailable) return 'text-slate-400 dark:text-slate-600';
+    
+    const isHealthy = providerStatus.health[providerName];
+    if (isHealthy) return 'text-green-600 dark:text-green-400';
+    return 'text-amber-600 dark:text-amber-400';
+  };
+
+  const getStatusBadge = (providerName: string) => {
+    if (!providerStatus) return null;
+    
+    const isAvailable = providerStatus.available.includes(providerName);
+    if (!isAvailable) {
+      return (
+        <span className="text-xs px-2 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
+          Not Configured
+        </span>
+      );
+    }
+    
+    const isHealthy = providerStatus.health[providerName];
+    if (isHealthy) {
+      return (
+        <span className="text-xs px-2 py-1 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 flex items-center gap-1">
+          <Icons.CheckCircle size={12} /> Healthy
+        </span>
+      );
+    }
+    
+    return (
+      <span className="text-xs px-2 py-1 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 flex items-center gap-1">
+        <Icons.AlertCircle size={12} /> Unhealthy
+      </span>
+    );
+  };
+
+  const recommendedKeys = getRecommendedAPIKeys();
+
   return (
     <div className="p-8 h-full overflow-y-auto bg-slate-50 dark:bg-slate-950 transition-colors">
       <div className="max-w-3xl mx-auto space-y-8">
         <header>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Settings & Integrations</h1>
-          <p className="text-slate-500 dark:text-slate-400">Manage your profile, API keys, and connections.</p>
+          <p className="text-slate-500 dark:text-slate-400">Manage your profile, AI providers, and integrations.</p>
         </header>
+
+        {/* AI Provider Status Section */}
+        <section className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-950/30 dark:to-purple-950/30 p-6 rounded-xl border border-indigo-200 dark:border-indigo-800 shadow-sm transition-colors">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 rounded-lg">
+                <Icons.Cpu size={20} />
+              </div>
+              <div>
+                <h2 className="font-semibold text-slate-900 dark:text-white">AI Provider Status</h2>
+                <p className="text-sm text-slate-600 dark:text-slate-400">Configure multiple providers for automatic fallback</p>
+              </div>
+            </div>
+            <button
+              onClick={checkProviders}
+              disabled={checkingProviders}
+              className="text-sm px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-indigo-200 dark:border-indigo-700 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors flex items-center gap-2"
+            >
+              <Icons.RefreshCw size={14} className={checkingProviders ? 'animate-spin' : ''} />
+              {checkingProviders ? 'Checking...' : 'Refresh'}
+            </button>
+          </div>
+
+          {providerStatus && (
+            <div className="mb-4 p-3 rounded-lg bg-white/50 dark:bg-slate-900/50 border border-indigo-100 dark:border-indigo-800">
+              <p className="text-sm text-slate-700 dark:text-slate-300">
+                <strong>Status:</strong> {providerStatus.recommendation}
+              </p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {recommendedKeys.map((provider) => {
+              const IconComponent = getProviderIcon(provider.name);
+              const statusColor = getStatusColor(provider.name);
+              
+              return (
+                <div
+                  key={provider.name}
+                  className="bg-white dark:bg-slate-900 p-4 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-700 transition-all"
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <IconComponent size={18} className={statusColor} />
+                      <h3 className="font-medium text-slate-900 dark:text-white text-sm">{provider.name}</h3>
+                    </div>
+                    {getStatusBadge(provider.name)}
+                  </div>
+                  
+                  <p className="text-xs text-slate-600 dark:text-slate-400 mb-3">{provider.description}</p>
+                  
+                  <div className="flex items-center justify-between">
+                    <code className="text-xs bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded text-slate-600 dark:text-slate-400">
+                      {provider.envVar}
+                    </code>
+                    <a
+                      href={provider.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 flex items-center gap-1"
+                    >
+                      Get Key <Icons.ExternalLink size={12} />
+                    </a>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 p-4 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800">
+            <div className="flex gap-3">
+              <Icons.Info size={18} className="text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+              <div className="text-sm text-blue-900 dark:text-blue-200">
+                <p className="font-medium mb-1">How to add API keys:</p>
+                <ol className="list-decimal list-inside space-y-1 text-blue-800 dark:text-blue-300">
+                  <li>Click "Get Key" to obtain a free API key from the provider</li>
+                  <li>Add the key to your Vercel environment variables (Settings → Environment Variables)</li>
+                  <li>Redeploy your application or restart your development server</li>
+                  <li>Click "Refresh" above to verify the provider is working</li>
+                </ol>
+                <p className="mt-2 text-xs text-blue-700 dark:text-blue-400">
+                  💡 Tip: Add at least 2 providers for automatic fallback and better reliability!
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
 
         {/* Profile Section */}
         <section className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
