@@ -20,6 +20,7 @@ const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ agent, initialData, onB
   const [output, setOutput] = useState<string | null>(null);
   const [projects, setProjects] = useState<any[]>([]);
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     // If there is chained content, we DON'T overwrite specific fields blindly.
@@ -57,6 +58,7 @@ const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ agent, initialData, onB
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    setRetryCount(0);
     
     const missing = agent.inputs.filter(i => i.required && !formData[i.name]);
     if (missing.length > 0) {
@@ -73,12 +75,27 @@ const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ agent, initialData, onB
           prompt = `BACKGROUND CONTEXT FROM PREVIOUS STEP:\n"""${initialData}"""\n\nTASK:\n${prompt}`;
       }
 
-      const result = await generateContent('gemini-2.5-flash', prompt, agent.systemInstruction);
+      const result = await generateContent('gemini-2.0-flash-exp', prompt, agent.systemInstruction);
       setOutput(result);
       showToast("Content generated successfully!", 'success');
-    } catch (error) {
-      console.error(error);
-      showToast("Error generating content. Please check your API key.", 'error');
+      setRetryCount(0);
+    } catch (error: any) {
+      console.error('Generation error:', error);
+      
+      // Extract user-friendly error message
+      const errorMessage = error?.message || String(error);
+      
+      // Show appropriate error message
+      if (errorMessage.includes('overloaded') || errorMessage.includes('503')) {
+        showToast("AI service is busy. Retrying automatically...", 'warning');
+        setRetryCount(prev => prev + 1);
+      } else if (errorMessage.includes('rate limit') || errorMessage.includes('429')) {
+        showToast("Rate limit reached. Please wait a moment.", 'warning');
+      } else if (errorMessage.includes('API key')) {
+        showToast("API configuration error. Please contact support.", 'error');
+      } else {
+        showToast(errorMessage, 'error');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -90,12 +107,13 @@ const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ agent, initialData, onB
     
     try {
       const refinementPrompt = `Original Content:\n${output}\n\nInstruction: ${instruction}\n\nPlease output ONLY the refined version of the content.`;
-      const result = await generateContent('gemini-2.5-flash', refinementPrompt, "You are an expert editor refining content based on user instructions.");
+      const result = await generateContent('gemini-2.0-flash-exp', refinementPrompt, "You are an expert editor refining content based on user instructions.");
       setOutput(result);
       showToast("Content refined!", 'success');
-    } catch (error) {
-       console.error(error);
-       showToast("Failed to refine content.", 'error');
+    } catch (error: any) {
+       console.error('Refinement error:', error);
+       const errorMessage = error?.message || String(error);
+       showToast(errorMessage, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -111,7 +129,7 @@ const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ agent, initialData, onB
       return;
     }
 
-    const { error } = await supabase.from('generated_content').insert([{
+    const { error } = await supabase.from('generated_results').insert([{
       project_id: projectId,
       user_id: userId,
       agent_id: agent.id,
@@ -145,6 +163,12 @@ const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ agent, initialData, onB
             <p className="text-xs text-slate-500 dark:text-slate-400">AI Powered Workflow</p>
           </div>
         </div>
+        {retryCount > 0 && (
+          <div className="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
+            <Icons.RefreshCw size={14} className="animate-spin" />
+            <span>Retry attempt {retryCount}/3</span>
+          </div>
+        )}
       </header>
 
       <div className="flex flex-1 overflow-hidden relative">
@@ -215,7 +239,10 @@ const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ agent, initialData, onB
               }`}
             >
               {isLoading ? (
-                <>Processing...</>
+                <>
+                  <Icons.Loader2 size={18} className="animate-spin" />
+                  Processing...
+                </>
               ) : (
                 <>Generate Content <Icons.Sparkles size={18} /></>
               )}
@@ -248,12 +275,12 @@ const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ agent, initialData, onB
                     <Icons.Folder size={16} /> {p.name}
                   </button>
                 )) : (
-                  <p className="text-sm text-slate-500 dark:text-slate-400">No projects found. Please create one in the Projects tab first.</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 text-center py-4">No projects yet. Create one first!</p>
                 )}
               </div>
               <button 
                 onClick={() => setShowSaveModal(false)}
-                className="w-full py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors text-sm font-medium"
+                className="w-full py-2 px-4 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium transition-colors"
               >
                 Cancel
               </button>
