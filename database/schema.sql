@@ -1,8 +1,8 @@
 -- ============================================
 -- RevenuePilot AI - Database Schema
 -- ============================================
--- Version: 1.0
--- Date: December 10, 2025
+-- Version: 1.1 (Fixed)
+-- Date: December 11, 2025
 -- Description: Complete database schema for RevenuePilot AI
 -- ============================================
 
@@ -11,13 +11,41 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm"; -- For text search
 
 -- ============================================
+-- FUNCTIONS (Create before triggers)
+-- ============================================
+
+-- Function to update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to auto-create user profile on signup
+CREATE OR REPLACE FUNCTION handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.user_profiles (id, email, full_name)
+  VALUES (
+    NEW.id,
+    NEW.email,
+    COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email)
+  )
+  ON CONFLICT (id) DO NOTHING;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- ============================================
 -- TABLES
 -- ============================================
 
 -- Projects table
 CREATE TABLE IF NOT EXISTS projects (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  user_id UUID NOT NULL,
   name TEXT NOT NULL CHECK (char_length(name) >= 1 AND char_length(name) <= 255),
   description TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
@@ -27,9 +55,9 @@ CREATE TABLE IF NOT EXISTS projects (
 -- Generated results table
 CREATE TABLE IF NOT EXISTS generated_results (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  project_id UUID,
   agent_id TEXT NOT NULL CHECK (char_length(agent_id) >= 1),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  user_id UUID NOT NULL,
   content TEXT NOT NULL CHECK (char_length(content) >= 1),
   inputs JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
@@ -37,7 +65,7 @@ CREATE TABLE IF NOT EXISTS generated_results (
 
 -- User profiles table
 CREATE TABLE IF NOT EXISTS user_profiles (
-  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  id UUID PRIMARY KEY,
   email TEXT UNIQUE,
   full_name TEXT,
   subscription_tier TEXT DEFAULT 'free' CHECK (subscription_tier IN ('free', 'pro', 'business', 'enterprise')),
@@ -50,7 +78,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 -- Usage analytics table (for tracking)
 CREATE TABLE IF NOT EXISTS usage_analytics (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  user_id UUID NOT NULL,
   agent_id TEXT NOT NULL,
   action_type TEXT NOT NULL CHECK (action_type IN ('generate', 'refine', 'save', 'export')),
   success BOOLEAN DEFAULT true,
@@ -62,11 +90,91 @@ CREATE TABLE IF NOT EXISTS usage_analytics (
 -- Favorites table
 CREATE TABLE IF NOT EXISTS favorites (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
-  result_id UUID REFERENCES generated_results(id) ON DELETE CASCADE NOT NULL,
+  user_id UUID NOT NULL,
+  result_id UUID NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
   UNIQUE(user_id, result_id)
 );
+
+-- ============================================
+-- ADD FOREIGN KEYS (After tables exist)
+-- ============================================
+
+-- Add foreign keys to projects
+DO $$ 
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'projects_user_id_fkey'
+  ) THEN
+    ALTER TABLE projects ADD CONSTRAINT projects_user_id_fkey 
+      FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+-- Add foreign keys to generated_results
+DO $$ 
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'generated_results_project_id_fkey'
+  ) THEN
+    ALTER TABLE generated_results ADD CONSTRAINT generated_results_project_id_fkey 
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+  END IF;
+  
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'generated_results_user_id_fkey'
+  ) THEN
+    ALTER TABLE generated_results ADD CONSTRAINT generated_results_user_id_fkey 
+      FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+-- Add foreign keys to user_profiles
+DO $$ 
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'user_profiles_id_fkey'
+  ) THEN
+    ALTER TABLE user_profiles ADD CONSTRAINT user_profiles_id_fkey 
+      FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+-- Add foreign keys to usage_analytics
+DO $$ 
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'usage_analytics_user_id_fkey'
+  ) THEN
+    ALTER TABLE usage_analytics ADD CONSTRAINT usage_analytics_user_id_fkey 
+      FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+-- Add foreign keys to favorites
+DO $$ 
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'favorites_user_id_fkey'
+  ) THEN
+    ALTER TABLE favorites ADD CONSTRAINT favorites_user_id_fkey 
+      FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+  END IF;
+  
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'favorites_result_id_fkey'
+  ) THEN
+    ALTER TABLE favorites ADD CONSTRAINT favorites_result_id_fkey 
+      FOREIGN KEY (result_id) REFERENCES generated_results(id) ON DELETE CASCADE;
+  END IF;
+END $$;
 
 -- ============================================
 -- INDEXES
@@ -217,19 +325,6 @@ CREATE POLICY "Users can delete own favorites"
   USING (auth.uid() = user_id);
 
 -- ============================================
--- FUNCTIONS
--- ============================================
-
--- Function to update updated_at timestamp
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- ============================================
 -- TRIGGERS
 -- ============================================
 
@@ -247,20 +342,6 @@ CREATE TRIGGER update_profiles_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
 
--- Function to auto-create user profile on signup
-CREATE OR REPLACE FUNCTION handle_new_user()
-RETURNS TRIGGER AS $$
-BEGIN
-  INSERT INTO public.user_profiles (id, email, full_name)
-  VALUES (
-    NEW.id,
-    NEW.email,
-    COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email)
-  );
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
 -- Trigger to create profile on user signup
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
@@ -272,10 +353,27 @@ CREATE TRIGGER on_auth_user_created
 -- REALTIME
 -- ============================================
 
--- Enable realtime for tables
-ALTER PUBLICATION supabase_realtime ADD TABLE projects;
-ALTER PUBLICATION supabase_realtime ADD TABLE generated_results;
-ALTER PUBLICATION supabase_realtime ADD TABLE favorites;
+-- Enable realtime for tables (ignore errors if already enabled)
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE projects;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE generated_results;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE favorites;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 -- ============================================
 -- VIEWS (Optional - for analytics)
@@ -312,31 +410,6 @@ GROUP BY agent_id
 ORDER BY usage_count DESC;
 
 -- ============================================
--- SAMPLE DATA (Optional - for testing)
--- ============================================
-
--- Uncomment to insert sample data for testing
-/*
--- Sample project
-INSERT INTO projects (user_id, name, description)
-VALUES (
-  auth.uid(),
-  'Sample Marketing Campaign',
-  'Test project for marketing content generation'
-);
-
--- Sample result
-INSERT INTO generated_results (project_id, agent_id, user_id, content, inputs)
-VALUES (
-  (SELECT id FROM projects WHERE name = 'Sample Marketing Campaign' LIMIT 1),
-  'ad-copy',
-  auth.uid(),
-  'Sample ad copy content here...',
-  '{"productName": "Test Product", "targetAudience": "Marketers"}'::jsonb
-);
-*/
-
--- ============================================
 -- GRANTS (if needed)
 -- ============================================
 
@@ -351,40 +424,12 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated;
 
 -- ============================================
--- VERIFICATION QUERIES
--- ============================================
-
--- Run these to verify setup:
-/*
--- Check tables
-SELECT table_name FROM information_schema.tables 
-WHERE table_schema = 'public' 
-ORDER BY table_name;
-
--- Check indexes
-SELECT indexname, tablename FROM pg_indexes 
-WHERE schemaname = 'public' 
-ORDER BY tablename, indexname;
-
--- Check RLS policies
-SELECT tablename, policyname, cmd, qual 
-FROM pg_policies 
-WHERE schemaname = 'public'
-ORDER BY tablename, policyname;
-
--- Check triggers
-SELECT trigger_name, event_manipulation, event_object_table 
-FROM information_schema.triggers 
-WHERE trigger_schema = 'public'
-ORDER BY event_object_table, trigger_name;
-*/
-
--- ============================================
 -- COMPLETION MESSAGE
 -- ============================================
 
 DO $$
 BEGIN
+  RAISE NOTICE '';
   RAISE NOTICE '✅ Database schema setup complete!';
   RAISE NOTICE '📊 Tables created: projects, generated_results, user_profiles, usage_analytics, favorites';
   RAISE NOTICE '🔒 Row Level Security enabled on all tables';
